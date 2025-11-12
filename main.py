@@ -1,6 +1,7 @@
 import tkinter as tk
 from tkinter import ttk
 from tkinter import font as tkfont
+from tkinter import simpledialog, messagebox
 import json
 import random
 import os
@@ -18,6 +19,160 @@ PLACEHOLDER_COLOR = "#a0a0a0"
 BG_COLOR = "#f0f0f0"
 
 
+# --- 新增: 卡组选择器弹出窗口 ---
+class DeckSelector(simpledialog.Dialog):
+    """一个用于从卡组池中选择卡组的弹出对话框"""
+
+    def __init__(self, parent, title, deck_pool, min_select, max_select, icon_size, font):
+        self.deck_pool = deck_pool
+        self.min_select = min_select
+        self.max_select = max_select
+        self.icon_size = icon_size
+        self.font = font
+        self.selected_decks_info = []
+        self.selected_widgets = []
+        self.widgets = {}
+        self.ok_button = None
+
+        # 修复PIL在Toplevel中的ImageTk.PhotoImage问题
+        self.icon_cache = []
+        self.max_cols_per_row = 5  # 每行最多5个
+
+        super().__init__(parent, title)
+
+    def body(self, master):
+        master.config(bg=BG_COLOR)
+
+        # 提示标签
+        self.status_label = tk.Label(master, text=self.get_status_text(), font=self.font, bg=BG_COLOR)
+        self.status_label.pack(pady=5)
+
+        # 可滚动的Canvas
+        canvas_frame = tk.Frame(master, bd=1, relief="sunken")
+
+        # 【修复1】: 计算合理的Canvas宽度
+        canvas_width = (self.icon_size[0] + 10) * self.max_cols_per_row + 10  # 5个图标宽度 + 间距
+        canvas_height = self.icon_size[1] * 2.5  # 约2.5行
+
+        canvas = tk.Canvas(canvas_frame, bg=BG_COLOR, width=canvas_width, height=canvas_height)
+
+        v_scrollbar = ttk.Scrollbar(canvas_frame, orient="vertical", command=canvas.yview)
+        # 【修复1】: 添加水平滚动条
+        h_scrollbar = ttk.Scrollbar(canvas_frame, orient="horizontal", command=canvas.xview)
+
+        canvas.configure(yscrollcommand=v_scrollbar.set, xscrollcommand=h_scrollbar.set)
+
+        scrollable_frame = tk.Frame(canvas, bg=BG_COLOR)
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+
+        def on_configure(event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        scrollable_frame.bind("<Configure>", on_configure)
+
+        # 布局
+        canvas_frame.pack(fill="both", expand=True, padx=10, pady=5)
+        v_scrollbar.pack(side="right", fill="y")
+        h_scrollbar.pack(side="bottom", fill="x")  # 【修复1】
+        canvas.pack(side="left", fill="both", expand=True)
+
+        # 填充卡组
+        col_count = 0
+        row = 0
+        for deck in self.deck_pool:
+            widget = self.create_mini_deck_widget(scrollable_frame, deck)
+            widget.grid(row=row, column=col_count, padx=5, pady=5)
+
+            self.widgets[widget] = deck
+
+            handler = lambda e, w=widget: self.toggle_select(w)
+            widget.bind("<Button-1>", handler)
+            widget.icon_label.bind("<Button-1>", handler)
+            widget.name_label.bind("<Button-1>", handler)
+
+            col_count += 1
+            if col_count >= self.max_cols_per_row:
+                col_count = 0
+                row += 1
+
+        return scrollable_frame
+
+    def buttonbox(self):
+        box = tk.Frame(self, bg=BG_COLOR)
+
+        self.ok_button = tk.Button(box, text="确认", width=10, command=self.ok, state="disabled", font=self.font)
+        self.ok_button.pack(side="left", padx=5, pady=10)
+        cancel_button = tk.Button(box, text="取消", width=10, command=self.cancel, font=self.font)
+        cancel_button.pack(side="left", padx=5, pady=10)
+
+        box.pack()
+
+        self.bind("<Escape>", self.cancel)
+
+    def toggle_select(self, widget):
+        """切换卡组的选择状态"""
+        if widget in self.selected_widgets:
+            self.selected_widgets.remove(widget)
+            widget.config(bg=BG_COLOR, relief="solid", bd=1)
+        else:
+            if len(self.selected_widgets) < self.max_select:
+                self.selected_widgets.append(widget)
+                widget.config(bg="#2ECC71", relief="solid", bd=3)
+            else:
+                self.bell()
+
+        self.update_status()
+
+    def get_status_text(self):
+        count = len(self.selected_widgets)
+        if self.min_select == self.max_select:
+            return f"请选择 {self.min_select} 套卡组 ({count}/{self.min_select})"
+        else:
+            return f"请选择 {self.min_select} 到 {self.max_select} 套卡组 ({count})"
+
+    def update_status(self):
+        self.status_label.config(text=self.get_status_text())
+
+        count = len(self.selected_widgets)
+        if self.min_select <= count <= self.max_select:
+            self.ok_button.config(state="normal")
+        else:
+            self.ok_button.config(state="disabled")
+
+    def apply(self):
+        """当点击OK时"""
+        self.selected_decks_info = [self.widgets[w] for w in self.selected_widgets]
+
+    # --- 迷你卡组创建 (用于弹窗) ---
+    def load_mini_icon(self, path):
+        try:
+            img = Image.open(path).resize(self.icon_size, Image.Resampling.LANCZOS)
+        except Exception:
+            img = Image.new("RGB", self.icon_size, color=PLACEHOLDER_COLOR)
+            draw = ImageDraw.Draw(img)
+            draw.text((self.icon_size[0] / 2, self.icon_size[1] / 2), "N/A", fill="white", anchor="mm")
+
+        img_tk = ImageTk.PhotoImage(img)
+        self.icon_cache.append(img_tk)
+        return img_tk
+
+    def create_mini_deck_widget(self, parent_frame, deck_info):
+        widget = tk.Frame(parent_frame, bg=BG_COLOR, relief="solid", bd=1, width=self.icon_size[0],
+                          height=self.icon_size[1])
+        widget.pack_propagate(False)
+
+        icon_img = self.load_mini_icon(deck_info["icon_path"])
+        icon_label = tk.Label(widget, image=icon_img, bd=0)
+        icon_label.place(x=0, y=0)
+
+        name_bg = tk.Label(widget, text=deck_info["name"], bg="black", fg="white", font=self.font, padx=5)
+        name_bg.place(relx=0.5, rely=1.0, anchor="s", y=-5)
+
+        widget.icon_label = icon_label
+        widget.name_label = name_bg
+        return widget
+
+
 # --- 主应用 ---
 class DeckBPSimulator(tk.Tk):
     def __init__(self):
@@ -25,14 +180,11 @@ class DeckBPSimulator(tk.Tk):
 
         # --- 缩放与字体处理 ---
         try:
-            # 获取Tk的缩放因子 (适配Windows缩放)
             self.scaling = self.tk.call('tk', 'scaling')
-            if self.scaling > 4:  # 异常值处理
-                self.scaling = self.scaling / 96.0
+            if self.scaling > 4: self.scaling = self.scaling / 96.0
         except Exception:
             self.scaling = 1.0
 
-        # 强制DPI感知 (备用方案)
         if self.scaling == 1.0 and platform.system() == "Windows" and ctypes:
             try:
                 scale_factor = ctypes.windll.shcore.GetScaleFactorForDevice(0)
@@ -40,55 +192,62 @@ class DeckBPSimulator(tk.Tk):
             except Exception:
                 self.scaling = 1.0
 
-        # 定义可缩放的常量
         self.ICON_WIDTH = int(100 * self.scaling)
         self.ICON_HEIGHT = int(140 * self.scaling)
         self.ICON_SIZE = (self.ICON_WIDTH, self.ICON_HEIGHT)
 
-        self.FONT_NAME = "Microsoft YaHei UI"  # 微软雅黑
+        self.MATCHUP_ICON_WIDTH = int(30 * self.scaling)
+        self.MATCHUP_ICON_HEIGHT = int(42 * self.scaling)
+        self.MATCHUP_ICON_SIZE = (self.MATCHUP_ICON_WIDTH, self.MATCHUP_ICON_HEIGHT)
+
+        self.FONT_NAME = "Microsoft YaHei UI"
         self.FONT_FALLBACK = "Arial"
 
-        # 字体大小 (已调低基础值)
-        self.font_size_default = int(5 * self.scaling)
-        self.font_size_overlay = int(5 * self.scaling)
-        self.font_size_status = int(6 * self.scaling)
-        self.font_size_group = int(5 * self.scaling)
-        self.font_size_ban_x = int(18 * self.scaling)  # 调低 "X" 大小
+        self.font_size_default = int(6 * self.scaling)
+        self.font_size_overlay = int(6 * self.scaling)
+        self.font_size_status = int(7 * self.scaling)
+        self.font_size_group = int(6 * self.scaling)
+        self.font_size_ban_x = int(18 * self.scaling)
 
-        # 定义字体元组
-        self.DEFAULT_FONT = (self.FONT_NAME, self.font_size_default)
-        self.OVERLAY_FONT = (self.FONT_NAME, self.font_size_overlay, "bold")
-        self.STATUS_FONT = (self.FONT_NAME, self.font_size_status)
-        self.GROUP_FONT = (self.FONT_NAME, self.font_size_group, "bold")
+        self.DEFAULT_FONT = self.check_font((self.FONT_NAME, self.font_size_default),
+                                            (self.FONT_FALLBACK, self.font_size_default))
+        self.OVERLAY_FONT = self.check_font((self.FONT_NAME, self.font_size_overlay, "bold"),
+                                            (self.FONT_FALLBACK, self.font_size_overlay, "bold"))
+        self.STATUS_FONT = self.check_font((self.FONT_NAME, self.font_size_status, "bold"),
+                                           (self.FONT_FALLBACK, self.font_size_status, "bold"))
+        self.GROUP_FONT = self.check_font((self.FONT_NAME, self.font_size_group, "bold"),
+                                          (self.FONT_FALLBACK, self.font_size_group, "bold"))
 
-        # 检查字体是否存在，如果不存在则回退
-        self.DEFAULT_FONT = self.check_font(self.DEFAULT_FONT, (self.FONT_FALLBACK, self.font_size_default))
-        self.OVERLAY_FONT = self.check_font(self.OVERLAY_FONT, (self.FONT_FALLBACK, self.font_size_overlay, "bold"))
-        self.STATUS_FONT = self.check_font(self.STATUS_FONT, (self.FONT_FALLBACK, self.font_size_status))
-        self.GROUP_FONT = self.check_font(self.GROUP_FONT, (self.FONT_FALLBACK, self.font_size_group, "bold"))
-        # --- 结束 缩放与字体 ---
-
-        self.title("卡组B/P对局模拟器")
-        self.geometry(f"{int(1200 * self.scaling)}x{int(800 * self.scaling)}")
+        self.title("卡组B/P对局模拟器 (v2.1)")
+        self.geometry(f"{int(1300 * self.scaling)}x{int(900 * self.scaling)}")
         self.configure(bg=BG_COLOR)
 
         # 1. 加载配置
         self.deck_pool = self.load_json("deck_pool.json", "卡组资源池")
-        self.my_fixed_decks_info = self.load_json("my_decks.json", "我方卡组")
+        self.my_fixed_decks_info_from_file = self.load_json("my_decks.json", "我方卡组")
 
-        if not self.deck_pool or not self.my_fixed_decks_info:
-            self.quit()
+        if not self.deck_pool or not self.my_fixed_decks_info_from_file:
+            self.quit();
             return
 
         # 2. 初始化状态变量
+        self.matchup_icon_cache = []
+
+        self.opponent_deck_mode = tk.StringVar(value="random")
+        self.my_deck_mode = tk.StringVar(value="file")
+        self.custom_opponent_ban = tk.BooleanVar(value=False)
+        self.custom_opponent_pick = tk.BooleanVar(value=False)
+        self.my_decks_changed = tk.BooleanVar(value=False)
+
         self.game_state = "SETUP"
         self.my_decks_widgets = []
         self.opponent_decks_widgets = []
-        self.my_decks_data = []
+        self.my_decks_data_current = []
         self.opponent_decks_data = []
         self.my_banned_widget = None
         self.opponent_banned_widget = None
         self.my_picked_widgets = []
+        self.opponent_picked_widgets = []
         self.opponent_picked_decks_data = []
 
         # 3. 创建UI
@@ -96,10 +255,8 @@ class DeckBPSimulator(tk.Tk):
         self.reset_game()
 
     def check_font(self, preferred_font, fallback_font):
-        """检查首选字体是否存在，不存在则返回备用字体"""
         try:
             f = tkfont.Font(font=preferred_font)
-            # 检查字体族是否按预期回退
             if f.actual()["family"].lower() in preferred_font[0].lower():
                 return preferred_font
             else:
@@ -108,55 +265,80 @@ class DeckBPSimulator(tk.Tk):
             return fallback_font
 
     def load_json(self, filepath, name):
-        """加载JSON配置文件"""
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except FileNotFoundError:
-            self.show_error(f"错误: 未找到配置文件 '{filepath}'。\n请确保 {name} 配置文件存在。")
+            self.show_error(f"错误: 未找到配置文件 '{filepath}'。")
             return None
         except json.JSONDecodeError:
             self.show_error(f"错误: 配置文件 '{filepath}' 格式错误。")
             return None
 
     def show_error(self, message):
-        """显示错误信息"""
         try:
             if self.status_label:
                 self.status_label.config(text=message, fg="red")
         except AttributeError:
-            # 在 status_label 创建前出错
-            error_label = tk.Label(self, text=message, fg="red", bg=BG_COLOR,
-                                   font=(self.FONT_NAME, self.font_size_status))
+            error_label = tk.Label(self, text=message, fg="red", bg=BG_COLOR, font=self.STATUS_FONT)
             error_label.pack(pady=50)
 
     # --- UI 创建 ---
     def create_widgets(self):
         """创建所有UI组件"""
 
-        # 顶部控制面板
+        # --- 顶部控制面板 (重构) ---
         control_frame = tk.Frame(self, bg=BG_COLOR)
-        control_frame.pack(pady=int(10 * self.scaling), fill="x")
+        control_frame.pack(pady=int(10 * self.scaling), fill="x", padx=int(20 * self.scaling))
 
-        tk.Label(control_frame, text="对方卡组数量:", bg=BG_COLOR, font=self.DEFAULT_FONT).pack(side="left", padx=(
-        int(20 * self.scaling), int(10 * self.scaling)))
+        # 对方卡组选择
+        opp_frame = tk.Frame(control_frame, bg=BG_COLOR)
+        tk.Label(opp_frame, text="对方卡组:", font=self.DEFAULT_FONT, bg=BG_COLOR).pack(side="left", padx=5)
+        ttk.Radiobutton(opp_frame, text="随机", variable=self.opponent_deck_mode, value="random",
+                        command=self.toggle_opponent_mode).pack(side="left")
+        ttk.Radiobutton(opp_frame, text="自定义", variable=self.opponent_deck_mode, value="custom",
+                        command=self.toggle_opponent_mode).pack(side="left")
 
-        self.opponent_count_var = tk.IntVar(value=4)
-        self.count_slider = ttk.Scale(control_frame, from_=4, to=6, orient="horizontal",
-                                      variable=self.opponent_count_var, length=150 * self.scaling,
+        self.count_slider = ttk.Scale(opp_frame, from_=4, to=6, orient="horizontal", variable=tk.DoubleVar(value=4),
+                                      length=100 * self.scaling,
                                       command=lambda v: self.opponent_count_var.set(int(float(v))))
-        self.count_slider.pack(side="left", padx=int(5 * self.scaling))
+        self.opponent_count_var = tk.IntVar(value=4)
+        self.count_slider.config(variable=self.opponent_count_var)
+        self.count_slider.pack(side="left", padx=5)
 
-        self.generate_button = tk.Button(control_frame, text="生成对局", font=self.DEFAULT_FONT,
+        opp_frame.pack(side="left")
+
+        # 我方卡组选择
+        my_frame = tk.Frame(control_frame, bg=BG_COLOR)
+        tk.Label(my_frame, text="我方卡组:", font=self.DEFAULT_FONT, bg=BG_COLOR).pack(side="left", padx=5)
+        ttk.Radiobutton(my_frame, text="默认", variable=self.my_deck_mode, value="file",
+                        command=self.toggle_my_deck_mode).pack(side="left")
+        ttk.Radiobutton(my_frame, text="自定义", variable=self.my_deck_mode, value="custom",
+                        command=self.toggle_my_deck_mode).pack(side="left")
+
+        self.save_my_decks_button = tk.Button(my_frame, text="保存卡组", font=self.DEFAULT_FONT,
+                                              command=self.save_my_decks, state="disabled")
+        self.save_my_decks_button.pack(side="left", padx=10)
+
+        my_frame.pack(side="left", padx=20)
+
+        # 游戏控制
+        game_control_frame = tk.Frame(control_frame, bg=BG_COLOR)
+        self.generate_button = tk.Button(game_control_frame, text="生成对局", font=self.DEFAULT_FONT,
                                          command=self.start_game_flow)
-        self.generate_button.pack(side="left", padx=int(20 * self.scaling))
+        self.generate_button.pack(side="left", padx=10)
 
-        self.reset_button = tk.Button(control_frame, text="重置", font=self.DEFAULT_FONT, command=self.reset_game)
-        self.reset_button.pack(side="left", padx=int(5 * self.scaling))
+        # 【新增4】: 撤回按钮
+        self.undo_button = tk.Button(game_control_frame, text="撤回", font=self.DEFAULT_FONT, command=self.process_undo,
+                                     state="disabled")
+        self.undo_button.pack(side="left", padx=5)
+
+        self.reset_button = tk.Button(game_control_frame, text="重置", font=self.DEFAULT_FONT, command=self.reset_game)
+        self.reset_button.pack(side="left", padx=5)
+        game_control_frame.pack(side="left")
 
         # 状态/提示信息
-        self.status_label = tk.Label(self, text="请滑动选择对方卡组数量，然后点击'生成对局'", font=self.STATUS_FONT,
-                                     bg=BG_COLOR)
+        self.status_label = tk.Label(self, text="请设置卡组，然后点击'生成对局'", font=self.STATUS_FONT, bg=BG_COLOR)
         self.status_label.pack(pady=int(10 * self.scaling))
 
         # 卡组显示区
@@ -167,6 +349,12 @@ class DeckBPSimulator(tk.Tk):
         self.opponent_frame = tk.LabelFrame(decks_frame, text="对方卡组 (待生成)", font=self.GROUP_FONT, bg=BG_COLOR,
                                             bd=2, relief="groove")
         self.opponent_frame.pack(side="top", fill="x", pady=int(10 * self.scaling))
+
+        self.custom_opponent_pick_check = ttk.Checkbutton(self.opponent_frame, text="手动选择对方出战卡组",
+                                                          variable=self.custom_opponent_pick, onvalue=True,
+                                                          offvalue=False)
+        self.custom_opponent_pick_check.pack(anchor="ne", padx=10)
+
         self.opponent_decks_container = tk.Frame(self.opponent_frame, bg=BG_COLOR)
         self.opponent_decks_container.pack(pady=int(15 * self.scaling))
 
@@ -174,6 +362,12 @@ class DeckBPSimulator(tk.Tk):
         self.my_frame = tk.LabelFrame(decks_frame, text="我方卡组", font=self.GROUP_FONT, bg=BG_COLOR, bd=2,
                                       relief="groove")
         self.my_frame.pack(side="top", fill="x", pady=int(10 * self.scaling))
+
+        self.custom_opponent_ban_check = ttk.Checkbutton(self.my_frame, text="手动选择对方Ban",
+                                                         variable=self.custom_opponent_ban, onvalue=True,
+                                                         offvalue=False)
+        self.custom_opponent_ban_check.pack(anchor="ne", padx=10)
+
         self.my_decks_container = tk.Frame(self.my_frame, bg=BG_COLOR)
         self.my_decks_container.pack(pady=int(15 * self.scaling))
 
@@ -181,29 +375,90 @@ class DeckBPSimulator(tk.Tk):
         self.matchup_frame = tk.LabelFrame(decks_frame, text="最终对战", font=self.GROUP_FONT, bg=BG_COLOR, bd=2,
                                            relief="groove")
         self.matchup_frame.pack(side="top", fill="x", pady=int(10 * self.scaling))
-        self.matchup_container = tk.Frame(self.matchup_frame, bg=BG_COLOR)
-        self.matchup_container.pack(pady=int(15 * self.scaling))
 
-    def load_deck_icon(self, path):
+        # 【修复2】: 移动随机按钮到对战框顶部
+        self.generate_matchup_button = tk.Button(self.matchup_frame, text="随机生成对战", font=self.DEFAULT_FONT,
+                                                 command=self.display_random_matchups, state="disabled")
+        self.generate_matchup_button.pack(pady=(int(5 * self.scaling), 0))
+        self.generate_matchup_button.pack_forget()  # 默认隐藏
+
+        self.matchup_container = tk.Frame(self.matchup_frame, bg=BG_COLOR)
+        self.matchup_container.pack(pady=int(15 * self.scaling), fill="x", expand=True)
+
+    # --- 新增: UI 模式切换 ---
+    def toggle_opponent_mode(self):
+        if self.opponent_deck_mode.get() == "random":
+            self.count_slider.config(state="normal")
+            self.status_label.config(text="请设置卡组，然后点击'生成对局'")
+        else:  # custom
+            self.count_slider.config(state="disabled")
+            self.status_label.config(text="请点击'生成对局'按钮以 [自定义] 对方卡组")
+
+    def toggle_my_deck_mode(self):
+        if self.my_deck_mode.get() == "file":
+            self.my_decks_data_current = list(self.my_fixed_decks_info_from_file)
+            self.my_decks_changed.set(False)
+            self.save_my_decks_button.config(state="disabled")
+            self.reload_my_decks_ui()
+            self.status_label.config(text="我方卡组已重置为 [默认]")
+        else:  # custom
+            selected = self.open_deck_selector(
+                "my",
+                "请选择6套 [我方] 卡组",
+                6, 6
+            )
+            if selected:
+                self.my_decks_data_current = selected
+                self.my_decks_changed.set(True)
+                self.save_my_decks_button.config(state="normal")
+                self.reload_my_decks_ui()
+                self.status_label.config(text="我方卡组已 [自定义]")
+            else:
+                self.my_deck_mode.set("file")
+
+    def save_my_decks(self):
+        """保存当前自定义的我方卡组到 my_decks.json"""
+        if not self.my_decks_changed.get():
+            return
+
+        try:
+            with open("my_decks.json", 'w', encoding='utf-8') as f:
+                json.dump(self.my_decks_data_current, f, indent=4, ensure_ascii=False)
+
+            self.my_fixed_decks_info_from_file = list(self.my_decks_data_current)
+            self.my_decks_changed.set(False)
+            self.save_my_decks_button.config(state="disabled")
+            self.status_label.config(text="成功保存 [我方卡组] 到 my_decks.json", fg="green")
+        except Exception as e:
+            self.show_error(f"保存失败: {e}")
+
+    def open_deck_selector(self, team, title, min_sel, max_sel):
+        """打开模态对话框"""
+        dialog = DeckSelector(self,
+                              title,
+                              self.deck_pool,
+                              min_sel, max_sel,
+                              self.ICON_SIZE,
+                              self.DEFAULT_FONT)
+
+        return dialog.selected_decks_info
+
+    # --- 卡组图标加载 ---
+    def load_deck_icon(self, path, size):
         """加载卡组图标，如果失败则创建占位符"""
         try:
-            img = Image.open(path).resize(self.ICON_SIZE, Image.Resampling.LANCZOS)
+            img = Image.open(path).resize(size, Image.Resampling.LANCZOS)
         except Exception:
-            # 文件未找到或非图片格式，创建占位符
-            img = Image.new("RGB", self.ICON_SIZE, color=PLACEHOLDER_COLOR)
+            img = Image.new("RGB", size, color=PLACEHOLDER_COLOR)
             draw = ImageDraw.Draw(img)
-
-            # 尝试加载一个通用字体，如果失败也没关系
             try:
-                # 尝试使用一个常见的中文兼容字体
                 font = ImageFont.truetype("simhei.ttf", self.font_size_default)
             except IOError:
                 try:
                     font = ImageFont.truetype("arial.ttf", self.font_size_default)
                 except IOError:
                     font = ImageFont.load_default()
-
-            draw.text((self.ICON_SIZE[0] / 2, self.ICON_SIZE[1] / 2), "图标缺失", fill="white", anchor="mm", font=font)
+            draw.text((size[0] / 2, size[1] / 2), "图标缺失", fill="white", anchor="mm", font=font)
 
         return ImageTk.PhotoImage(img)
 
@@ -212,108 +467,153 @@ class DeckBPSimulator(tk.Tk):
 
         widget = tk.Frame(parent_frame, bg=BG_COLOR, relief="solid", bd=1, width=self.ICON_SIZE[0],
                           height=self.ICON_SIZE[1])
-        widget.pack_propagate(False)  # 固定大小
+        widget.pack_propagate(False)
 
-        # 加载图标
-        icon_img = self.load_deck_icon(deck_info["icon_path"])
+        icon_img = self.load_deck_icon(deck_info["icon_path"], self.ICON_SIZE)
 
         icon_label = tk.Label(widget, image=icon_img, bd=0)
-        icon_label.image = icon_img  # 保持引用
+        icon_label.image = icon_img
         icon_label.place(x=0, y=0)
 
-        # 覆盖名称
         name_bg = tk.Label(widget, text=deck_info["name"], bg="black", fg="white", font=self.OVERLAY_FONT,
                            padx=int(5 * self.scaling))
-        # 使用 place 在图标上叠加名称
         name_bg.place(relx=0.5, rely=1.0, anchor="s", y=int(-5 * self.scaling))
 
-        # --- 新增: 创建隐藏的 "X" 标识 ---
         ban_font = self.check_font((self.FONT_NAME, self.font_size_ban_x, "bold"),
                                    (self.FONT_FALLBACK, self.font_size_ban_x, "bold"))
-        widget.ban_overlay = tk.Label(widget, text="❌", fg="#E74C3C", bg=BG_COLOR,
-                                      font=ban_font)
-        # 注意: 此时不 .place() 它，保持隐藏
+        widget.ban_overlay = tk.Label(widget, text="❌", fg="#E74C3C", bg=BG_COLOR, font=ban_font)
 
         widget.pack(side="left", padx=int(10 * self.scaling))
 
-        # 附加数据和引用
         widget.deck_info = deck_info
-        widget.icon_label = icon_label  # 用于灰度化
-        widget.name_label = name_bg  # <-- 【修复-1】: 存储对 name_label 的引用
+        widget.icon_label = icon_label
+        widget.name_label = name_bg
 
         return widget
 
     def clear_frame(self, frame):
-        """清除Frame中的所有子组件"""
         for widget in frame.winfo_children():
             widget.destroy()
 
     # --- 游戏流程 ---
 
+    def reload_my_decks_ui(self):
+        """仅刷新我方卡组UI (用于自定义)"""
+        self.clear_frame(self.my_decks_container)
+        self.my_decks_container.pack(pady=int(15 * self.scaling))
+
+        self.my_decks_widgets = []
+        for deck in self.my_decks_data_current:
+            widget = self.create_deck_widget(self.my_decks_container, deck)
+            self.my_decks_widgets.append(widget)
+
     def reset_game(self):
         """重置整个游戏状态和UI"""
         self.game_state = "SETUP"
-        self.status_label.config(text="请滑动选择对方卡组数量，然后点击'生成对局'", fg="black")
+        self.status_label.config(text="请设置卡组，然后点击'生成对局'", fg="black")
 
         self.my_banned_widget = None
         self.opponent_banned_widget = None
         self.my_picked_widgets = []
+        self.opponent_picked_widgets = []
         self.opponent_picked_decks_data = []
 
-        self.my_decks_data = list(self.my_fixed_decks_info)  # 深拷贝
+        self.my_decks_data_current = list(self.my_fixed_decks_info_from_file)
         self.opponent_decks_data = []
 
         self.clear_frame(self.opponent_decks_container)
         self.clear_frame(self.my_decks_container)
         self.clear_frame(self.matchup_container)
 
-        # 确保容器在清空后仍有内边距
         self.opponent_decks_container.pack(pady=int(15 * self.scaling))
         self.my_decks_container.pack(pady=int(15 * self.scaling))
-        self.matchup_container.pack(pady=int(15 * self.scaling))
+        self.matchup_container.pack(pady=int(15 * self.scaling), fill="x", expand=True)
 
         self.opponent_frame.config(text="对方卡组 (待生成)")
+        self.reload_my_decks_ui()
 
-        # 重新加载我方卡组UI
-        self.my_decks_widgets = []
-        for deck in self.my_decks_data:
-            widget = self.create_deck_widget(self.my_decks_container, deck)
-            self.my_decks_widgets.append(widget)
+        self.opponent_deck_mode.set("random")
+        self.my_deck_mode.set("file")
+        self.custom_opponent_ban.set(False)
+        self.custom_opponent_pick.set(False)
+        self.my_decks_changed.set(False)
 
         self.count_slider.config(state="normal")
         self.generate_button.config(state="normal")
+        self.save_my_decks_button.config(state="disabled")
+        self.undo_button.config(state="disabled")  # 【新增4】
+
+        self.generate_matchup_button.pack_forget()
+
+        for w in self.opponent_frame.winfo_children():
+            if isinstance(w, ttk.Radiobutton): w.config(state="normal")
+        for w in self.my_frame.winfo_children():
+            if isinstance(w, ttk.Radiobutton): w.config(state="normal")
+
+        self.custom_opponent_ban_check.config(state="normal")
+        self.custom_opponent_pick_check.config(state="normal")
+        self.matchup_icon_cache = []
+
+    def set_controls_locked(self, locked):
+        """锁定/解锁顶部的控制"""
+        state = "disabled" if locked else "normal"
+        self.count_slider.config(state="disabled" if locked or self.opponent_deck_mode.get() == "custom" else "normal")
+        self.generate_button.config(state=state)
+        self.save_my_decks_button.config(state="disabled" if locked or not self.my_decks_changed.get() else "normal")
+
+        # 【新增4】: 撤回按钮在锁定时也禁用
+        if locked:
+            self.undo_button.config(state="disabled")
+
+        self.custom_opponent_ban_check.config(state=state)
+        self.custom_opponent_pick_check.config(state=state)
+
+        for w in self.winfo_children():
+            if isinstance(w, tk.Frame):
+                for child in w.winfo_children():
+                    if isinstance(child, tk.Frame):
+                        for grandchild in child.winfo_children():
+                            if isinstance(grandchild, ttk.Radiobutton):
+                                grandchild.config(state=state)
 
     def start_game_flow(self):
         """点击“生成”按钮，开始B/P流程"""
-        # 1. 重置(部分重置，保留我方UI)
+        self.set_controls_locked(True)
+
         self.game_state = "BAN"
-        self.count_slider.config(state="disabled")
-        self.generate_button.config(state="disabled")
         self.clear_frame(self.opponent_decks_container)
         self.clear_frame(self.matchup_container)
+        self.generate_matchup_button.pack_forget()
 
-        # 重置我方卡组状态
         for widget in self.my_decks_widgets:
             self.set_widget_visual(widget, "normal")
-            widget.unbind("<Button-1>")
-            widget.icon_label.unbind("<Button-1>")
-            widget.name_label.unbind("<Button-1>")
-            if hasattr(widget, 'ban_overlay'):
-                widget.ban_overlay.unbind("<Button-1>")
+            self.unbind_widget_clicks(widget)
 
         self.my_banned_widget = None
         self.opponent_banned_widget = None
         self.my_picked_widgets = []
+        self.opponent_picked_widgets = []
         self.opponent_picked_decks_data = []
 
-        # 2. 生成对方卡组
-        count = self.opponent_count_var.get()
-        if len(self.deck_pool) < count:
-            self.show_error("卡组资源池中的卡组数量不足。")
-            self.reset_game()
-            return
+        if self.opponent_deck_mode.get() == "random":
+            count = self.opponent_count_var.get()
+            if len(self.deck_pool) < count:
+                self.show_error("卡组资源池中的卡组数量不足。")
+                self.reset_game()
+                return
+            self.opponent_decks_data = random.sample(self.deck_pool, count)
+        else:  # custom
+            selected = self.open_deck_selector(
+                "opponent",
+                "请选择 4 到 6 套 [对方] 卡组",
+                4, 6
+            )
+            if not selected:
+                self.reset_game()
+                return
+            self.opponent_decks_data = selected
 
-        self.opponent_decks_data = random.sample(self.deck_pool, count)
+        count = len(self.opponent_decks_data)
         self.opponent_frame.config(text=f"对方卡组 ({count}套)")
 
         self.opponent_decks_widgets = []
@@ -321,207 +621,303 @@ class DeckBPSimulator(tk.Tk):
             widget = self.create_deck_widget(self.opponent_decks_container, deck)
             self.opponent_decks_widgets.append(widget)
 
-            # 【修复-2】: 必须绑定到所有子组件，因为它们会遮挡父Frame
             handler = lambda e, w=widget: self.handle_deck_click(w, "opponent")
-            widget.bind("<Button-1>", handler)
-            widget.icon_label.bind("<Button-1>", handler)
-            widget.name_label.bind("<Button-1>", handler)
-            widget.ban_overlay.bind("<Button-1>", handler)  # <-- 新增
+            self.bind_widget_clicks(widget, handler)
 
-        # 3. 更新状态
         self.status_label.config(text="[Ban阶段] 请点击一套 [对方卡组] 进行Ban (1/1)", fg="blue")
+
+    def bind_widget_clicks(self, widget, handler):
+        """绑定点击事件到卡组的所有子组件"""
+        widget.bind("<Button-1>", handler)
+        widget.icon_label.bind("<Button-1>", handler)
+        widget.name_label.bind("<Button-1>", handler)
+        if hasattr(widget, 'ban_overlay'):
+            widget.ban_overlay.bind("<Button-1>", handler)
+
+    def unbind_widget_clicks(self, widget):
+        """解绑卡组的所有点击事件"""
+        widget.unbind("<Button-1>")
+        widget.icon_label.unbind("<Button-1>")
+        widget.name_label.unbind("<Button-1>")
+        if hasattr(widget, 'ban_overlay'):
+            widget.ban_overlay.unbind("<Button-1>")
 
     def handle_deck_click(self, widget, target_team):
         """处理卡组点击事件 (Ban 和 Pick)"""
 
         if self.game_state == "BAN":
-            # 玩家Ban对方
             if target_team == "opponent":
-                if self.opponent_banned_widget:
-                    return  # 已经Ban过了
+                if self.opponent_banned_widget: return
 
                 self.opponent_banned_widget = widget
                 self.set_widget_visual(widget, "banned")
 
-                # 【修复-3】: Ban了之后，移除所有组件的点击事件
-                widget.unbind("<Button-1>")
-                widget.icon_label.unbind("<Button-1>")
-                widget.name_label.unbind("<Button-1>")
-                widget.ban_overlay.unbind("<Button-1>")  # <-- 新增
+                for w in self.opponent_decks_widgets:
+                    self.unbind_widget_clicks(w)
 
-                # 玩家Ban完后，触发对方(AI)Ban
+                # 【新增4】: 激活撤回按钮
+                self.undo_button.config(state="normal")
+
                 self.process_ai_ban()
 
-                # 进入Pick阶段
-                self.game_state = "PICK"
-                self.status_label.config(text="[Pick阶段] 请选择 3 套 [我方卡组] 出战 (0/3)", fg="blue")
+        elif self.game_state == "CUSTOM_OPPONENT_BAN":
+            if target_team == "my":
+                if self.my_banned_widget: return
 
-                # 为我方卡组绑定Pick事件
+                self.my_banned_widget = widget
+                self.set_widget_visual(widget, "banned")
+
                 for w in self.my_decks_widgets:
-                    if w != self.my_banned_widget:  # 不能选被Ban的
-                        # 【修复-4】: 同样，为我方卡组绑定所有子组件的点击
-                        handler = lambda e, w=w: self.handle_deck_click(w, "my")
-                        w.bind("<Button-1>", handler)
-                        w.icon_label.bind("<Button-1>", handler)
-                        w.name_label.bind("<Button-1>", handler)
-                        w.ban_overlay.bind("<Button-1>", handler)  # <-- 新增
+                    self.unbind_widget_clicks(w)
+
+                # 【新增4】: 激活撤回按钮 (在手动Ban时也激活)
+                self.undo_button.config(state="normal")
+
+                self.start_player_pick_phase()
 
         elif self.game_state == "PICK":
-            # 玩家Pick己方
             if target_team == "my":
                 if widget in self.my_picked_widgets:
-                    # 取消选择
                     self.my_picked_widgets.remove(widget)
                     self.set_widget_visual(widget, "normal")
                 elif len(self.my_picked_widgets) < 3:
-                    # 选择
                     self.my_picked_widgets.append(widget)
                     self.set_widget_visual(widget, "picked")
 
-                # 更新状态
                 count = len(self.my_picked_widgets)
                 self.status_label.config(text=f"[Pick阶段] 请选择 3 套 [我方卡组] 出战 ({count}/3)")
 
-                # 如果选满了3套
                 if len(self.my_picked_widgets) == 3:
-                    self.game_state = "DONE"
-                    self.status_label.config(text="阵容确定！正在生成对战...", fg="green")
+                    self.game_state = "PENDING_OPPONENT_PICK"
+                    self.status_label.config(text="我方阵容确定！等待对方选择...", fg="green")
 
-                    # 触发对方(AI)Pick
+                    for w in self.my_decks_widgets:
+                        self.unbind_widget_clicks(w)
+
                     self.process_ai_pick()
 
-                    # 显示最终对战
-                    self.show_final_matchup()
+        elif self.game_state == "CUSTOM_OPPONENT_PICK":
+            if target_team == "opponent":
+                if widget in self.opponent_picked_widgets:
+                    self.opponent_picked_widgets.remove(widget)
+                    self.set_widget_visual(widget, "normal")
+                elif len(self.opponent_picked_widgets) < 3:
+                    self.opponent_picked_widgets.append(widget)
+                    self.set_widget_visual(widget, "picked")
+
+                count = len(self.opponent_picked_widgets)
+                self.status_label.config(text=f"[对方Pick阶段] 请选择 3 套 [对方卡组] 出战 ({count}/3)")
+
+                if len(self.opponent_picked_widgets) == 3:
+                    self.game_state = "DONE"
+                    self.status_label.config(text="双方阵容确定！", fg="green")
+
+                    self.opponent_picked_decks_data = [w.deck_info for w in self.opponent_picked_widgets]
+
+                    for w in self.opponent_decks_widgets:
+                        self.unbind_widget_clicks(w)
+
+                    self.show_final_matchup_button()
 
     def set_widget_visual(self, widget, state):
         """设置卡组的视觉状态 (高亮)"""
-
-        # --- 新增: "X" 标识管理 ---
-        # 1. 首先，总是尝试隐藏 "X"
         if hasattr(widget, 'ban_overlay'):
             widget.ban_overlay.place_forget()
 
-        # 2. 根据状态设置边框和 "X"
         if state == "normal":
             widget.config(bg=BG_COLOR, relief="solid", bd=1)
         elif state == "banned":
-            widget.config(bg="#E74C3C", relief="solid", bd=int(3 * self.scaling))  # 红色高亮
-            # 2a. 显示 "X"
+            widget.config(bg="#E74C3C", relief="solid", bd=int(3 * self.scaling))
             if hasattr(widget, 'ban_overlay'):
                 widget.ban_overlay.place(relx=0.5, rely=0.5, anchor="center")
         elif state == "picked":
-            widget.config(bg="#2ECC71", relief="solid", bd=int(3 * self.scaling))  # 绿色高亮
+            widget.config(bg="#2ECC71", relief="solid", bd=int(3 * self.scaling))
+
+    def start_player_pick_phase(self):
+        """(辅助函数) 进入玩家Pick阶段"""
+        # 【新增4】: 进入Pick阶段，禁用撤回 (Pick操作可逆)
+        self.undo_button.config(state="disabled")
+
+        self.game_state = "PICK"
+        self.status_label.config(text="[Pick阶段] 请选择 3 套 [我方卡组] 出战 (0/3)", fg="blue")
+
+        for w in self.my_decks_widgets:
+            if w != self.my_banned_widget:
+                handler = lambda e, w=w: self.handle_deck_click(w, "my")
+                self.bind_widget_clicks(w, handler)
 
     # --- AI 逻辑 (入口) ---
 
     def process_ai_ban(self):
-        """处理对方(AI)的Ban选择"""
-        available_to_ban = [w for w in self.my_decks_widgets]
+        """处理对方(AI或手动)的Ban选择"""
+        if self.custom_opponent_ban.get():
+            self.game_state = "CUSTOM_OPPONENT_BAN"
+            self.status_label.config(text="[对方Ban阶段] 请点击一套 [我方卡组] 进行Ban", fg="red")
 
-        # --- AI Ban 逻辑入口 ---
-        # (未来在这里替换更复杂的逻辑)
-        self.my_banned_widget = self.ai_logic_ban(available_to_ban)
-        # --- 结束 ---
+            for w in self.my_decks_widgets:
+                handler = lambda e, w=w: self.handle_deck_click(w, "my")
+                self.bind_widget_clicks(w, handler)
+        else:
+            available_to_ban = [w for w in self.my_decks_widgets]
+            self.my_banned_widget = self.ai_logic_ban(available_to_ban)
 
-        if self.my_banned_widget:
-            self.set_widget_visual(self.my_banned_widget, "banned")
+            if self.my_banned_widget:
+                self.set_widget_visual(self.my_banned_widget, "banned")
+                self.unbind_widget_clicks(self.my_banned_widget)
 
-            # 【修复-5】: AI Ban我方卡组后，同样移除所有子组件的点击
-            self.my_banned_widget.unbind("<Button-1>")
-            self.my_banned_widget.icon_label.unbind("<Button-1>")
-            self.my_banned_widget.name_label.unbind("<Button-1>")
-            self.my_banned_widget.ban_overlay.unbind("<Button-1>")  # <-- 新增
+            self.start_player_pick_phase()
 
     def process_ai_pick(self):
-        """处理对方(AI)的Pick选择"""
-        available_to_pick = [w for w in self.opponent_decks_widgets if w != self.opponent_banned_widget]
+        """处理对方(AI或手动)的Pick选择"""
+        # 【新增4】: 进入Pick阶段，禁用撤回
+        self.undo_button.config(state="disabled")
 
-        # --- AI Pick 逻辑入口 ---
-        # (未来在这里替换更复杂的逻辑)
-        picked_widgets = self.ai_logic_pick(available_to_pick, 3)
-        # --- 结束 ---
+        if self.custom_opponent_pick.get():
+            self.game_state = "CUSTOM_OPPONENT_PICK"
+            self.status_label.config(text="[对方Pick阶段] 请选择 3 套 [对方卡组] 出战 (0/3)", fg="red")
 
-        self.opponent_picked_decks_data = []
-        for widget in picked_widgets:
-            # 【!! 错误修复 !!】
-            # 之前: widget.set_visual_state("picked") (这是PyQt的函数名)
-            # 之后:
-            self.set_widget_visual(widget, "picked")
+            for w in self.opponent_decks_widgets:
+                if w != self.opponent_banned_widget:
+                    handler = lambda e, w=w: self.handle_deck_click(w, "opponent")
+                    self.bind_widget_clicks(w, handler)
+        else:
+            available_to_pick = [w for w in self.opponent_decks_widgets if w != self.opponent_banned_widget]
+            picked_widgets = self.ai_logic_pick(available_to_pick, 3)
 
-            self.opponent_picked_decks_data.append(widget.deck_info)
+            self.opponent_picked_decks_data = []
+            for widget in picked_widgets:
+                self.set_widget_visual(widget, "picked")
+                self.opponent_picked_decks_data.append(widget.deck_info)
+                self.unbind_widget_clicks(widget)
 
-            # 移除点击事件
-            widget.unbind("<Button-1>")
-            widget.icon_label.unbind("<Button-1>")
-            widget.name_label.unbind("<Button-1>")
-            if hasattr(widget, 'ban_overlay'):
-                widget.ban_overlay.unbind("<Button-1>")
+            self.game_state = "DONE"
+            self.status_label.config(text="双方阵容确定！", fg="green")
+            self.show_final_matchup_button()
 
-    def show_final_matchup(self):
-        """显示最终的1v1随机匹配"""
+    # --- 新增: 撤回逻辑 ---
+    def process_undo(self):
+        """
+        撤回操作。仅在Ban阶段结束后、Pick阶段开始前有效。
+        撤销双方的Ban。
+        """
+        if self.game_state != "PICK" and self.game_state != "CUSTOM_OPPONENT_PICK":
+            return  # 只有在这两个状态（刚Ban完）才能撤回
+
+        # 1. 重置状态
+        self.game_state = "BAN"
+        self.status_label.config(text="[Ban阶段] (已撤回) 请点击一套 [对方卡组] 进行Ban (1/1)", fg="blue")
+        self.undo_button.config(state="disabled")
+
+        # 2. 清除Pick阶段的绑定
+        for w in self.my_decks_widgets:
+            self.unbind_widget_clicks(w)
+
+        # 3. 恢复我方被Ban卡组
+        if self.my_banned_widget:
+            self.set_widget_visual(self.my_banned_widget, "normal")
+            self.my_banned_widget = None
+
+        # 4. 恢复对方被Ban卡组，并重新绑定所有对方卡组的点击
+        if self.opponent_banned_widget:
+            self.set_widget_visual(self.opponent_banned_widget, "normal")
+            self.opponent_banned_widget = None
+
+        for w in self.opponent_decks_widgets:
+            handler = lambda e, w=w: self.handle_deck_click(w, "opponent")
+            self.bind_widget_clicks(w, handler)
+
+    def show_final_matchup_button(self):
+        """显示"生成对战"按钮"""
+        self.matchup_frame.config(text="最终对战")
         self.clear_frame(self.matchup_container)
+        self.matchup_container.pack(pady=int(15 * self.scaling), fill="x", expand=True)
+
+        # 【修复2】: 确保按钮显示在顶部
+        self.generate_matchup_button.pack(pady=(int(10 * self.scaling), int(15 * self.scaling)))
+        self.generate_matchup_button.config(state="normal")
+
+    def display_random_matchups(self):
+        """(按钮触发) 显示最终的1v1随机匹配"""
+        self.clear_frame(self.matchup_container)
+        self.matchup_container.pack(pady=int(15 * self.scaling), fill="x", expand=True)
 
         my_final_picks = [w.deck_info for w in self.my_picked_widgets]
-        opp_final_picks = list(self.opponent_picked_decks_data)  # 确保是拷贝
+        opp_final_picks = list(self.opponent_picked_decks_data)
+
+        if len(my_final_picks) != 3 or len(opp_final_picks) != 3:
+            self.show_error("错误：双方出战卡组不为3。")
+            return
 
         random.shuffle(my_final_picks)
         random.shuffle(opp_final_picks)
 
         self.matchup_frame.config(text="最终对战 (1v1 随机匹配)")
+        self.matchup_icon_cache = []
 
         for i in range(3):
-            # 检查列表是否为空，防止索引错误
-            if i >= len(my_final_picks) or i >= len(opp_final_picks):
-                break
-
             my_deck = my_final_picks[i]
             opp_deck = opp_final_picks[i]
 
             match_row = tk.Frame(self.matchup_container, bg=BG_COLOR)
-            match_row.pack(pady=int(5 * self.scaling))
+            match_row.pack(pady=int(5 * self.scaling), fill='x')
 
-            # (我方)
-            tk.Label(match_row, text=my_deck['name'], font=self.OVERLAY_FONT, fg="blue", bg=BG_COLOR,
-                     width=int(20 * self.scaling), anchor="e").pack(side="left")
+            # --- 【修复3】: 使用Grid布局重构对战显示 ---
 
-            tk.Label(match_row, text=" VS ", font=(self.FONT_NAME, self.font_size_status, "bold"), bg=BG_COLOR).pack(
-                side="left", padx=int(20 * self.scaling))
+            # 配置Grid: 1(我方) - 2(VS) - 3(对方)
+            match_row.columnconfigure(0, weight=3, uniform="team")
+            match_row.columnconfigure(1, weight=1, uniform="vs")
+            match_row.columnconfigure(2, weight=3, uniform="team")
 
-            # (对方)
-            tk.Label(match_row, text=opp_deck['name'], font=self.OVERLAY_FONT, fg="red", bg=BG_COLOR,
-                     width=int(20 * self.scaling), anchor="w").pack(side="left")
+            # 我方 (图标 + 名称)
+            my_team_frame = tk.Frame(match_row, bg=BG_COLOR)
+
+            my_icon_img = self.load_deck_icon(my_deck['icon_path'], self.MATCHUP_ICON_SIZE)
+            self.matchup_icon_cache.append(my_icon_img)
+            my_icon_label = tk.Label(my_team_frame, image=my_icon_img, bd=0, bg=BG_COLOR)
+            my_icon_label.image = my_icon_img
+            my_icon_label.pack(side="right", padx=(0, 5))  # 图标在右
+
+            tk.Label(my_team_frame, text=my_deck['name'], font=self.OVERLAY_FONT, fg="blue", bg=BG_COLOR,
+                     anchor="e").pack(side="right", fill="x", expand=True)
+
+            my_team_frame.grid(row=0, column=0, sticky="e")  # 整体右对齐
+
+            # VS
+            tk.Label(match_row, text=" VS ", font=(self.FONT_NAME, self.font_size_status, "bold"), bg=BG_COLOR).grid(
+                row=0, column=1)
+
+            # 对方 (图标 + 名称)
+            opp_team_frame = tk.Frame(match_row, bg=BG_COLOR)
+
+            opp_icon_img = self.load_deck_icon(opp_deck['icon_path'], self.MATCHUP_ICON_SIZE)
+            self.matchup_icon_cache.append(opp_icon_img)
+            opp_icon_label = tk.Label(opp_team_frame, image=opp_icon_img, bd=0, bg=BG_COLOR)
+            opp_icon_label.image = opp_icon_img
+            opp_icon_label.pack(side="left", padx=(5, 0))  # 图标在左
+
+            tk.Label(opp_team_frame, text=opp_deck['name'], font=self.OVERLAY_FONT, fg="red", bg=BG_COLOR,
+                     anchor="w").pack(side="left", fill="x", expand=True)
+
+            opp_team_frame.grid(row=0, column=2, sticky="w")  # 整体左对齐
 
     # --- 可替换的 AI 逻辑 ---
 
     def ai_logic_ban(self, available_decks):
-        """
-        AI Ban 逻辑 (可替换)
-        目前: 随机选择
-        """
-        if not available_decks:
-            return None
+        if not available_decks: return None
         return random.choice(available_decks)
 
     def ai_logic_pick(self, available_decks, num_to_pick):
-        """
-        AI Pick 逻辑 (可替换)
-        目前: 随机选择
-        """
         if len(available_decks) < num_to_pick:
-            return available_decks  # 如果不够选，全选
-
+            return available_decks
         return random.sample(available_decks, num_to_pick)
 
 
 def set_dpi_awareness():
-    """设置Windows DPI感知，以实现高分屏缩放"""
     if platform.system() == "Windows" and ctypes:
         try:
-            # GDI-Scaling (GDI缩放)
             ctypes.windll.user32.SetProcessDPIAware()
         except (AttributeError, OSError):
             try:
-                # Per-Monitor DPI Awareness V2 (Win 10+)
                 ctypes.windll.shcore.SetProcessDpiAwareness(2)
             except (AttributeError, OSError):
                 print("Warning: Could not set DPI awareness. Scaling might be incorrect.")
@@ -529,13 +925,10 @@ def set_dpi_awareness():
 
 # --- DPI 运行 ---
 if __name__ == "__main__":
-    # 检查 icons 文件夹是否存在
     if not os.path.exists("icons"):
-        print("未检测到 'icons' 文件夹，正在创建...")
         os.makedirs("icons")
-        print("请将您的卡组图标文件 (如 deck_a.png) 放入 'icons' 文件夹中。")
+        print("已创建 'icons' 文件夹。请放入卡组图标。")
 
-    # --- 新增: 在启动App前设置DPI感知 ---
     set_dpi_awareness()
 
     app = DeckBPSimulator()
