@@ -4,7 +4,7 @@
 "icon_path": "icons/tw00007598.png"
 },
 {
-"name": "密勒顿",
+"name": "密勒顿（雪道）",
 "icon_path": "icons/hk00008407.png"
 },
   {
@@ -41,6 +41,10 @@
 },
   {
 "name": "宙斯冰六尾",
+"icon_path": "icons/hk00008690.png"
+},
+    {
+"name": "LTB小人",
 "icon_path": "icons/hk00008690.png"
 }
 ]

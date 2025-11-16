@@ -181,7 +181,7 @@ class DeckBPSimulator(tk.Tk):
         # --- 缩放与字体处理 ---
         try:
             self.scaling = self.tk.call('tk', 'scaling')
-            if self.scaling > 4: self.scaling = self.scaling / 96.0
+            if self.scaling > 4: self.scaling = self.scaling / 96.0  # 适配Linux/X11
         except Exception:
             self.scaling = 1.0
 
@@ -203,11 +203,12 @@ class DeckBPSimulator(tk.Tk):
         self.FONT_NAME = "Microsoft YaHei UI"
         self.FONT_FALLBACK = "Arial"
 
-        self.font_size_default = int(6 * self.scaling)
-        self.font_size_overlay = int(6 * self.scaling)
-        self.font_size_status = int(7 * self.scaling)
-        self.font_size_group = int(6 * self.scaling)
-        self.font_size_ban_x = int(18 * self.scaling)
+        # 字体缩小
+        self.font_size_default = int(5 * self.scaling)  # 6 -> 5
+        self.font_size_overlay = int(5 * self.scaling)  # 6 -> 5
+        self.font_size_status = int(6 * self.scaling)  # 7 -> 6
+        self.font_size_group = int(5 * self.scaling)  # 6 -> 5
+        self.font_size_ban_x = int(15 * self.scaling)  # 18 -> 15
 
         self.DEFAULT_FONT = self.check_font((self.FONT_NAME, self.font_size_default),
                                             (self.FONT_FALLBACK, self.font_size_default))
@@ -218,7 +219,7 @@ class DeckBPSimulator(tk.Tk):
         self.GROUP_FONT = self.check_font((self.FONT_NAME, self.font_size_group, "bold"),
                                           (self.FONT_FALLBACK, self.font_size_group, "bold"))
 
-        self.title("卡组B/P对局模拟器 (v2.1)")
+        self.title("卡组B/P对局模拟器 (v2.2)")  # 版本更新
         self.geometry(f"{int(1300 * self.scaling)}x{int(900 * self.scaling)}")
         self.configure(bg=BG_COLOR)
 
@@ -287,12 +288,20 @@ class DeckBPSimulator(tk.Tk):
     def create_widgets(self):
         """创建所有UI组件"""
 
+        # 【布局修复】: 随机生成对战按钮移至窗口顶部
+        self.generate_matchup_button = tk.Button(self, text="随机生成对战", font=self.DEFAULT_FONT,
+                                                 command=self.display_random_matchups, state="disabled")
+        # 初始打包 (稍后隐藏)
+        self.generate_matchup_button.pack(pady=(int(10 * self.scaling), 0), fill="x", padx=int(20 * self.scaling))
+        self.generate_matchup_button.pack_forget()  # 默认隐藏
+
         # --- 顶部控制面板 (重构) ---
-        control_frame = tk.Frame(self, bg=BG_COLOR)
-        control_frame.pack(pady=int(10 * self.scaling), fill="x", padx=int(20 * self.scaling))
+        # 【布局修复】: 保存 control_frame 引用
+        self.control_frame = tk.Frame(self, bg=BG_COLOR)
+        self.control_frame.pack(pady=int(10 * self.scaling), fill="x", padx=int(20 * self.scaling))
 
         # 对方卡组选择
-        opp_frame = tk.Frame(control_frame, bg=BG_COLOR)
+        opp_frame = tk.Frame(self.control_frame, bg=BG_COLOR)
         tk.Label(opp_frame, text="对方卡组:", font=self.DEFAULT_FONT, bg=BG_COLOR).pack(side="left", padx=5)
         ttk.Radiobutton(opp_frame, text="随机", variable=self.opponent_deck_mode, value="random",
                         command=self.toggle_opponent_mode).pack(side="left")
@@ -309,7 +318,7 @@ class DeckBPSimulator(tk.Tk):
         opp_frame.pack(side="left")
 
         # 我方卡组选择
-        my_frame = tk.Frame(control_frame, bg=BG_COLOR)
+        my_frame = tk.Frame(self.control_frame, bg=BG_COLOR)
         tk.Label(my_frame, text="我方卡组:", font=self.DEFAULT_FONT, bg=BG_COLOR).pack(side="left", padx=5)
         ttk.Radiobutton(my_frame, text="默认", variable=self.my_deck_mode, value="file",
                         command=self.toggle_my_deck_mode).pack(side="left")
@@ -323,7 +332,7 @@ class DeckBPSimulator(tk.Tk):
         my_frame.pack(side="left", padx=20)
 
         # 游戏控制
-        game_control_frame = tk.Frame(control_frame, bg=BG_COLOR)
+        game_control_frame = tk.Frame(self.control_frame, bg=BG_COLOR)
         self.generate_button = tk.Button(game_control_frame, text="生成对局", font=self.DEFAULT_FONT,
                                          command=self.start_game_flow)
         self.generate_button.pack(side="left", padx=10)
@@ -375,12 +384,6 @@ class DeckBPSimulator(tk.Tk):
         self.matchup_frame = tk.LabelFrame(decks_frame, text="最终对战", font=self.GROUP_FONT, bg=BG_COLOR, bd=2,
                                            relief="groove")
         self.matchup_frame.pack(side="top", fill="x", pady=int(10 * self.scaling))
-
-        # 【修复2】: 移动随机按钮到对战框顶部
-        self.generate_matchup_button = tk.Button(self.matchup_frame, text="随机生成对战", font=self.DEFAULT_FONT,
-                                                 command=self.display_random_matchups, state="disabled")
-        self.generate_matchup_button.pack(pady=(int(5 * self.scaling), 0))
-        self.generate_matchup_button.pack_forget()  # 默认隐藏
 
         self.matchup_container = tk.Frame(self.matchup_frame, bg=BG_COLOR)
         self.matchup_container.pack(pady=int(15 * self.scaling), fill="x", expand=True)
@@ -452,6 +455,7 @@ class DeckBPSimulator(tk.Tk):
             img = Image.new("RGB", size, color=PLACEHOLDER_COLOR)
             draw = ImageDraw.Draw(img)
             try:
+                # 尝试加载中文字体
                 font = ImageFont.truetype("simhei.ttf", self.font_size_default)
             except IOError:
                 try:
@@ -541,7 +545,7 @@ class DeckBPSimulator(tk.Tk):
         self.count_slider.config(state="normal")
         self.generate_button.config(state="normal")
         self.save_my_decks_button.config(state="disabled")
-        self.undo_button.config(state="disabled")  # 【新增4】
+        self.undo_button.config(state="disabled")  # 【撤回】
 
         self.generate_matchup_button.pack_forget()
 
@@ -561,7 +565,7 @@ class DeckBPSimulator(tk.Tk):
         self.generate_button.config(state=state)
         self.save_my_decks_button.config(state="disabled" if locked or not self.my_decks_changed.get() else "normal")
 
-        # 【新增4】: 撤回按钮在锁定时也禁用
+        # 【撤回】: 撤回按钮在锁定时也禁用
         if locked:
             self.undo_button.config(state="disabled")
 
@@ -655,7 +659,7 @@ class DeckBPSimulator(tk.Tk):
                 for w in self.opponent_decks_widgets:
                     self.unbind_widget_clicks(w)
 
-                # 【新增4】: 激活撤回按钮
+                # 【撤回】: 激活撤回按钮
                 self.undo_button.config(state="normal")
 
                 self.process_ai_ban()
@@ -670,7 +674,7 @@ class DeckBPSimulator(tk.Tk):
                 for w in self.my_decks_widgets:
                     self.unbind_widget_clicks(w)
 
-                # 【新增4】: 激活撤回按钮 (在手动Ban时也激活)
+                # 【撤回】: 激活撤回按钮 (在手动Ban时也激活)
                 self.undo_button.config(state="normal")
 
                 self.start_player_pick_phase()
@@ -694,6 +698,8 @@ class DeckBPSimulator(tk.Tk):
                     for w in self.my_decks_widgets:
                         self.unbind_widget_clicks(w)
 
+                    # 【撤回】: 我方Pick完毕，撤回按钮依然可用
+                    self.undo_button.config(state="normal")
                     self.process_ai_pick()
 
         elif self.game_state == "CUSTOM_OPPONENT_PICK":
@@ -717,6 +723,8 @@ class DeckBPSimulator(tk.Tk):
                     for w in self.opponent_decks_widgets:
                         self.unbind_widget_clicks(w)
 
+                    # 【撤回】: 双方Pick完毕，撤回按钮依然可用
+                    self.undo_button.config(state="normal")
                     self.show_final_matchup_button()
 
     def set_widget_visual(self, widget, state):
@@ -735,8 +743,8 @@ class DeckBPSimulator(tk.Tk):
 
     def start_player_pick_phase(self):
         """(辅助函数) 进入玩家Pick阶段"""
-        # 【新增4】: 进入Pick阶段，禁用撤回 (Pick操作可逆)
-        self.undo_button.config(state="disabled")
+        # 【撤回】: 进入Pick阶段，撤回按钮依然可用
+        self.undo_button.config(state="normal")
 
         self.game_state = "PICK"
         self.status_label.config(text="[Pick阶段] 请选择 3 套 [我方卡组] 出战 (0/3)", fg="blue")
@@ -769,8 +777,8 @@ class DeckBPSimulator(tk.Tk):
 
     def process_ai_pick(self):
         """处理对方(AI或手动)的Pick选择"""
-        # 【新增4】: 进入Pick阶段，禁用撤回
-        self.undo_button.config(state="disabled")
+        # 【撤回】: 进入Pick阶段，撤回按钮依然可用
+        self.undo_button.config(state="normal")
 
         if self.custom_opponent_pick.get():
             self.game_state = "CUSTOM_OPPONENT_PICK"
@@ -785,61 +793,126 @@ class DeckBPSimulator(tk.Tk):
             picked_widgets = self.ai_logic_pick(available_to_pick, 3)
 
             self.opponent_picked_decks_data = []
+            self.opponent_picked_widgets = []  # 记录AI Pick的widget
             for widget in picked_widgets:
                 self.set_widget_visual(widget, "picked")
                 self.opponent_picked_decks_data.append(widget.deck_info)
+                self.opponent_picked_widgets.append(widget)  # AI Pick
                 self.unbind_widget_clicks(widget)
 
             self.game_state = "DONE"
             self.status_label.config(text="双方阵容确定！", fg="green")
             self.show_final_matchup_button()
 
-    # --- 新增: 撤回逻辑 ---
+    # --- 撤回逻辑 (重构) ---
     def process_undo(self):
         """
-        撤回操作。仅在Ban阶段结束后、Pick阶段开始前有效。
-        撤销双方的Ban。
+        多级撤回操作。
+        1. (DONE, 已生成对战) -> (DONE, 未生成对战)
+        2. (DONE, 未生成对战) -> (PICK / CUSTOM_OPPONENT_PICK)
+        3. (PENDING_OPPONENT_PICK) -> (PICK)
+        4. (PICK / CUSTOM_OPPONENT_PICK) -> (BAN)
         """
-        if self.game_state != "PICK" and self.game_state != "CUSTOM_OPPONENT_PICK":
-            return  # 只有在这两个状态（刚Ban完）才能撤回
 
-        # 1. 重置状态
-        self.game_state = "BAN"
-        self.status_label.config(text="[Ban阶段] (已撤回) 请点击一套 [对方卡组] 进行Ban (1/1)", fg="blue")
-        self.undo_button.config(state="disabled")
+        # 1. 撤销对战表 (如果已生成)
+        if self.game_state == "DONE" and self.matchup_container.winfo_children():
+            self.status_label.config(text="[撤销] 已清空对战表。您可以重新生成。", fg="black")
+            self.clear_frame(self.matchup_container)
+            # 按钮留在原处，保持 "DONE" 状态
+            return
 
-        # 2. 清除Pick阶段的绑定
-        for w in self.my_decks_widgets:
-            self.unbind_widget_clicks(w)
+        # 2. 撤销双方Pick (返回Pick阶段)
+        if self.game_state == "DONE":
+            # 撤销我方Pick
+            for w in self.my_picked_widgets:
+                self.set_widget_visual(w, "normal")
+            self.my_picked_widgets = []
 
-        # 3. 恢复我方被Ban卡组
-        if self.my_banned_widget:
-            self.set_widget_visual(self.my_banned_widget, "normal")
-            self.my_banned_widget = None
+            # 撤销对方Pick (手动或AI)
+            for w in self.opponent_picked_widgets:
+                self.set_widget_visual(w, "normal")
+            self.opponent_picked_widgets = []
+            self.opponent_picked_decks_data = []
 
-        # 4. 恢复对方被Ban卡组，并重新绑定所有对方卡组的点击
-        if self.opponent_banned_widget:
-            self.set_widget_visual(self.opponent_banned_widget, "normal")
-            self.opponent_banned_widget = None
+            self.generate_matchup_button.pack_forget()
 
-        for w in self.opponent_decks_widgets:
-            handler = lambda e, w=w: self.handle_deck_click(w, "opponent")
-            self.bind_widget_clicks(w, handler)
+            # 检查是返回AI Pick还是手动Pick
+            if self.custom_opponent_pick.get():
+                self.game_state = "CUSTOM_OPPONENT_PICK"
+                self.status_label.config(text="[撤销] 返回 [对方Pick阶段]", fg="red")
+                # 重新绑定对方卡组点击
+                for w in self.opponent_decks_widgets:
+                    if w != self.opponent_banned_widget:
+                        handler = lambda e, w=w: self.handle_deck_click(w, "opponent")
+                        self.bind_widget_clicks(w, handler)
+            else:
+                self.game_state = "PENDING_OPPONENT_PICK"  # 将由下一步撤销
+
+            # 重新绑定我方卡组点击
+            self.start_player_pick_phase()  # 这会将状态设置为 PICK
+            self.status_label.config(text="[撤销] 返回 [我方Pick阶段]", fg="blue")
+            return
+
+        # 3. 撤销我方Pick (如果对方是AI且我方刚选完)
+        if self.game_state == "PENDING_OPPONENT_PICK":
+            # 撤销我方Pick
+            for w in self.my_picked_widgets:
+                self.set_widget_visual(w, "normal")
+            self.my_picked_widgets = []
+
+            # 撤销AI Pick (如果AI已经选了)
+            for w in self.opponent_picked_widgets:
+                self.set_widget_visual(w, "normal")
+            self.opponent_picked_widgets = []
+            self.opponent_picked_decks_data = []
+
+            self.start_player_pick_phase()  # 返回我方Pick
+            self.status_label.config(text="[撤销] 返回 [我方Pick阶段]", fg="blue")
+            return
+
+        # 4. 撤销Ban (返回Ban阶段)
+        if self.game_state == "PICK" or self.game_state == "CUSTOM_OPPONENT_PICK":
+            self.game_state = "BAN"
+            self.status_label.config(text="[撤销] 返回 [Ban阶段]。请重新Ban [对方卡组]", fg="blue")
+            self.undo_button.config(state="disabled")  # 这是撤回链的末端
+
+            # 清除Pick阶段的绑定
+            for w in self.my_decks_widgets:
+                self.unbind_widget_clicks(w)
+
+            # 恢复我方被Ban卡组
+            if self.my_banned_widget:
+                self.set_widget_visual(self.my_banned_widget, "normal")
+                self.my_banned_widget = None
+
+            # 恢复对方被Ban卡组，并重新绑定所有对方卡组的点击
+            if self.opponent_banned_widget:
+                self.set_widget_visual(self.opponent_banned_widget, "normal")
+                self.opponent_banned_widget = None
+
+            for w in self.opponent_decks_widgets:
+                handler = lambda e, w=w: self.handle_deck_click(w, "opponent")
+                self.bind_widget_clicks(w, handler)
+
+            return
 
     def show_final_matchup_button(self):
         """显示"生成对战"按钮"""
         self.matchup_frame.config(text="最终对战")
         self.clear_frame(self.matchup_container)
-        self.matchup_container.pack(pady=int(15 * self.scaling), fill="x", expand=True)
 
-        # 【修复2】: 确保按钮显示在顶部
-        self.generate_matchup_button.pack(pady=(int(10 * self.scaling), int(15 * self.scaling)))
+        # 【布局修复】: 强制按钮在 control_frame 之前显示
+        self.generate_matchup_button.pack(
+            before=self.control_frame,  # <-- 关键修复
+            pady=(int(10 * self.scaling), 0),
+            fill="x",
+            padx=int(20 * self.scaling)
+        )
         self.generate_matchup_button.config(state="normal")
 
     def display_random_matchups(self):
         """(按钮触发) 显示最终的1v1随机匹配"""
         self.clear_frame(self.matchup_container)
-        self.matchup_container.pack(pady=int(15 * self.scaling), fill="x", expand=True)
 
         my_final_picks = [w.deck_info for w in self.my_picked_widgets]
         opp_final_picks = list(self.opponent_picked_decks_data)
